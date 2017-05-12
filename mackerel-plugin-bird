@@ -210,7 +210,7 @@ t = Time.now
   birdc('show', 'memory', v6: v6)[1..-1].map do |l|
     label, value = l.split(?:)
     name = {
-      'Routing tables' => 'routes',
+      'Routing tables' => 'tables',
       'Route attributes' => 'attributes',
       'ROA tables' => 'roa',
       'Protocols' => 'protocols',
