@@ -38,7 +38,7 @@ def last_values_file
 end
 
 def last_values
-  @last_values = if File.exist?(last_values_file)
+  @last_values ||= if File.exist?(last_values_file)
     JSON.parse(File.read(last_values_file))
   else
     {}
