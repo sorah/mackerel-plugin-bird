@@ -54,10 +54,10 @@ def calc_diff(name, new_value, time: @t || Time.now)
   last_values[name] = {'value' => new_value, 'at' => time.to_i}
 
   if last
-    if last['value'] > value
+    if last['value'] > new_value
       return 0
     else
-      return value - last['value']
+      return new_value - last['value']
     end
   else
     return 0
