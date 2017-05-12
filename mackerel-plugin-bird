@@ -161,32 +161,32 @@ if ENV['MACKEREL_AGENT_PLUGIN_META'] == '1'
         label: "BIRD#{foursix}: proto #{name} import stats",
         unit: 'integer',
         metrics: [
-          {name: "update_receive", label: "Received updates"},
-          {name: "update_reject", label: "Rejected updates"},
-          {name: "update_filter", label: "Filtered updates"},
-          {name: "update_ignore", label: "Ignored updates"},
-          {name: "update_accept", label: "Accepted updates"},
-          {name: "withdraw_receive", label: "Received withdraws"},
-          {name: "withdraw_reject", label: "Rejected withdraws"},
+          {name: "updates_receive", label: "Received updates"},
+          {name: "updates_reject", label: "Rejected updates"},
+          {name: "updates_filter", label: "Filtered updates"},
+          {name: "updates_ignore", label: "Ignored updates"},
+          {name: "updates_accept", label: "Accepted updates"},
+          {name: "withdraws_receive", label: "Received withdraws"},
+          {name: "withdraws_reject", label: "Rejected withdraws"},
 
-          {name: "withdraw_ignore", label: "Ignored withdraws"},
-          {name: "withdraw_accept", label: "Accepted withdraws"},
+          {name: "withdraws_ignore", label: "Ignored withdraws"},
+          {name: "withdraws_accept", label: "Accepted withdraws"},
         ],
       }
       graphs["bird#{six}.protocol.#{safename(name)}.stats.export"] = {
         label: "BIRD#{foursix}: proto #{name} export stats",
         unit: 'integer',
         metrics: [
-          {name: "update_receive", label: "Received updates"},
-          {name: "update_reject", label: "Rejected updates"},
-          {name: "update_filter", label: "Filtered updates"},
+          {name: "updates_receive", label: "Received updates"},
+          {name: "updates_reject", label: "Rejected updates"},
+          {name: "updates_filter", label: "Filtered updates"},
 
-          {name: "update_accept", label: "Accepted updates"},
-          {name: "withdraw_receive", label: "Received withdraws"},
+          {name: "updates_accept", label: "Accepted updates"},
+          {name: "withdraws_receive", label: "Received withdraws"},
 
 
 
-          {name: "withdraw_accept", label: "Accepted withdraws"},
+          {name: "withdraws_accept", label: "Accepted withdraws"},
         ],
       }
     end
