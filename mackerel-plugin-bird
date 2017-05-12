@@ -147,11 +147,6 @@ if ENV['MACKEREL_AGENT_PLUGIN_META'] == '1'
       name,proto,table,state,since,info = l.split(/\s+/, 6)
       next unless protocols.include?(proto)
       next if ignored_protocol_names.include?(name)
-      graphs["bird#{six}.protocol.#{safename(name)}.state"] = {
-        label: "BIRD#{foursix}: proto #{name} state",
-        unit: 'integer',
-        metrics: [name: "code", label: "state code (0:down,1:start,2:wait,3:feed,4:up,5:stop,6:flush)"],
-      }
       graphs["bird#{six}.protocol.#{safename(name)}.routes"] = {
         label: "BIRD#{foursix}: proto #{name} routes",
         unit: 'integer',
@@ -230,24 +225,13 @@ t = Time.now
     next if ignored_protocol_names.include?(name)
     name_base = "bird#{six}.protocol.#{safename(name)}"
     
-    state_int = {
-      'down' => 0,
-      'start' => 1,
-      'wait' => 2,
-      'feed' => 3,
-      'up' => 4,
-      'stop' => 5,
-      'flush' => 6,
-    }.fetch(state, 90000)
-
     m = x.grep(/^\s+Routes:\s/).first.match(/(\d+) imported(?:, (\d+) filtered)?, (\d+) exported(?:, (\d+) preferred)?$/)
     if m
       %w(import filter export prefer).each_with_index do |n, i|
         put_metric "#{name_base}.routes.#{n}", (m[i.succ] && !m[i.succ].empty?) ? m[i.succ].to_i : 0
       end
-    else
-      state_int = 90001
     end
+
     x.each do |l|
       m = l.match(/^\s+(Import|Export) (updates|withdraws):\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)$/)
       next unless m
@@ -259,8 +243,6 @@ t = Time.now
         end
       end
     end
-
-    put_metric "#{name_base}.state.code", state_int
   end
 end
 

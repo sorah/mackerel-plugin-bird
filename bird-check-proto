@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+# https://github.com/sorah/mackerel-plugin-bird
+#
+# The MIT License (MIT)
+# 
+# Copyright (c) 2017 Sorah Fukumori
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+def birdc(*cmd, v6: false)
+  IO.popen([v6 ? 'birdc6' : 'birdc6', *cmd], 'r', &:read).each_line.lazy.map(&:chomp).grep_v(/^BIRD .* ready\.$/).to_a
+end
+
+v6 = ARGV.delete('-6')
+name = ARGV.first
+
+line = birdc('show', 'protocols', name, v6: v6).last
+if line.end_with?('is not a protocol')
+  exit 2
+end
+
+name,proto,table,state,since,info = line.split(/\s+/, 6)
+case state
+when nil
+  exit 2
+when 'up'
+  exit 0
+when 'down'
+  exit 2
+else
+  exit 1
+end
+
