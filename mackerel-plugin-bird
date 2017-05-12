@@ -1,0 +1,243 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'fileutils'
+require 'optparse'
+
+def tempdir
+  @tempdir ||= File.join(ENV.fetch('MACKEREL_PLUGIN_WORKDIR', '/tmp'), 'mackerel-plugin-bird').tap do |x|
+    FileUtils.mkdir_p x
+  end
+end
+
+def last_values_file
+  @last_values_file ||= File.join(tempdir, 'last')
+end
+
+def last_values
+  @last_values = if File.exist?(last_values_file)
+    JSON.parse(File.read(last_values_file))
+  else
+    {}
+  end
+end
+
+def save_last_values!
+  File.write last_values_file, "#{last_values.to_json}\n"
+end
+
+def calc_diff(name, new_value, time: @t || Time.now)
+  last = last_values[name]
+  last_values[name] = {'value' => new_value, 'at' => time.to_i}
+
+  if last
+    if last['value'] > value
+      return 0
+    else
+      return value - last['value']
+    end
+  else
+    return 0
+  end
+end
+
+def birdc(*cmd, v6: false)
+  IO.popen([v6 ? 'birdc6' : 'birdc6', *cmd], 'r', &:read).each_line.lazy.map(&:chomp).grep_v(/^BIRD .* ready\.$/).to_a
+end
+
+def safename(name)
+  name.gsub(/\./,'_')
+end
+
+# https://github.com/BIRD/bird/blob/7a855725f2ffde508da0c7ee01dc1bcd6e0a5d93/nest/cmds.c#L68
+def parse_size(str)
+  m = str.match(/\A\s*(\d+)\s+?(?:([kMG]?)B)\s*\z/)
+  if m
+    base = m[1].to_i
+    unit = m[2]
+    case unit
+    when 'k'
+      base * 1024
+    when 'M'
+      base * 1024 * 1024
+    when 'G'
+      base * 1024 * 1024 * 1024
+    else
+      base
+    end
+  else
+    raise "Couldn't parse #{str.inspect}"
+  end
+end
+
+def put_metric(name, value, diff: false, time: @t || Time.now)
+  value = if diff
+    calc_diff(name, value.to_i, time: time)
+  else
+    value.to_i
+  end
+  puts "#{name}\t#{value}\t#{time.to_i}"
+end
+
+protocols = %w(Kernel BGP OSPF)
+ignored_protocol_names = []
+
+OptionParser.new do |o|
+  o.on('-p', '--protocols PROTOCOLS', 'protocol types to generate metrics (separated by comma) default=Kernel,BGP,OSPF') do |s|
+    protocols = s.split(?,)
+  end
+  o.on('-i', '--ignore PROTOCOLS', 'Protocol names to ignore (separated by comma)') do |s|
+    ignored_protocol_names = s.split(?,)
+  end
+end.parse!
+
+if ENV['MACKEREL_AGENT_PLUGIN_META'] == '1'
+  graphs = {
+    'bird.memory' => {
+      label: 'BIRD4: memory usage',
+      unit: 'bytes',
+      metrics: [
+        {name: 'tables', label: 'Routing tables', stacked: true},
+        {name: 'attributes', label: 'Route attributes', stacked: true},
+        {name: 'roa', label: 'ROA tables', stacked: true},
+        {name: 'protocols', label: 'Protocols', stacked: true},
+        {name: 'total', label: 'Total', stacked: false},
+      ],
+    },
+    'bird6.memory' => {
+      label: 'BIRD6: memory usage',
+      unit: 'bytes',
+      metrics: [
+        {name: 'tables', label: 'Routing tables', stacked: true},
+        {name: 'attributes', label: 'Route attributes', stacked: true},
+        {name: 'roa', label: 'ROA tables', stacked: true},
+        {name: 'protocols', label: 'Protocols', stacked: true},
+        {name: 'total', label: 'Total', stacked: false},
+      ],
+    },
+  }
+
+  [false, true].each do |v6|
+    foursix = v6 ? '6' : '4'
+    six = v6 ? '6' : ''
+    birdc('show', 'protocols', v6: v6)[1..-1].each do |l|
+      name,proto,table,state,since,info = l.split(/\s+/, 6)
+      next unless protocols.include?(proto)
+      next if ignored_protocol_names.include?(name)
+      graphs["bird#{six}.protocol.#{safename(name)}.state"] = {
+        label: "BIRD#{foursix}: proto #{name} state",
+        unit: 'integer',
+        metrics: [name: "code", label: "state code (0:down,1:start,2:wait,3:feed,4:up,5:stop,6:flush)"],
+      }
+      graphs["bird#{six}.protocol.#{safename(name)}.routes"] = {
+        label: "BIRD#{foursix}: proto #{name} routes",
+        unit: 'integer',
+        metrics: [
+          {name: "import", label: "Imported routes"},
+          {name: "export", label: "Exported routes"},
+          {name: "prefer", label: "Preferred routes"},
+          {name: "filter", label: "Filtered routes"},
+        ],
+      }
+      graphs["bird#{six}.protocol.#{safename(name)}.stats.import"] = {
+        label: "BIRD#{foursix}: proto #{name} import stats",
+        unit: 'integer',
+        metrics: [
+          {name: "update_receive", label: "Received updates"},
+          {name: "update_reject", label: "Rejected updates"},
+          {name: "update_filter", label: "Filtered updates"},
+          {name: "update_ignore", label: "Ignored updates"},
+          {name: "update_accept", label: "Accepted updates"},
+          {name: "withdraw_receive", label: "Received withdraws"},
+          {name: "withdraw_reject", label: "Rejected withdraws"},
+
+          {name: "withdraw_ignore", label: "Ignored withdraws"},
+          {name: "withdraw_accept", label: "Accepted withdraws"},
+        ],
+      }
+      graphs["bird#{six}.protocol.#{safename(name)}.stats.export"] = {
+        label: "BIRD#{foursix}: proto #{name} export stats",
+        unit: 'integer',
+        metrics: [
+          {name: "update_receive", label: "Received updates"},
+          {name: "update_reject", label: "Rejected updates"},
+          {name: "update_filter", label: "Filtered updates"},
+
+          {name: "update_accept", label: "Accepted updates"},
+          {name: "withdraw_receive", label: "Received withdraws"},
+
+
+
+          {name: "withdraw_accept", label: "Accepted withdraws"},
+        ],
+      }
+    end
+  end
+
+  meta = {
+    graphs: graphs,
+  }
+
+  puts '# mackerel-agent-plugin'
+  puts meta.to_json
+  exit 0
+end
+
+t = Time.now
+
+[false, true].each do |v6|
+  foursix = v6 ? '6' : '4'
+  six = v6 ? '6' : ''
+
+  birdc('show', 'memory', v6: v6)[1..-1].map do |l|
+    label, value = l.split(?:)
+    name = {
+      'Routing tables' => 'routes',
+      'Route attributes' => 'attributes',
+      'ROA tables' => 'roa',
+      'Protocols' => 'protocols',
+      'Total' => 'total',
+    }.fetch(label)
+    put_metric("bird#{six}.memory.#{name}", parse_size(value.strip))
+  end
+
+  birdc('show', 'protocol', 'all', v6: v6)[1..-1].slice_after(&:empty?).each do |x|
+    name,proto,table,state,since,info = x.first.split(/\s+/, 6)
+    next unless protocols.include?(proto)
+    next if ignored_protocol_names.include?(name)
+    name_base = "bird#{six}.protocol.#{safename(name)}"
+    
+    state_int = {
+      'down' => 0,
+      'start' => 1,
+      'wait' => 2,
+      'feed' => 3,
+      'up' => 4,
+      'stop' => 5,
+      'flush' => 6,
+    }.fetch(state, 90000)
+
+    m = x.grep(/^\s+Routes:\s/).first.match(/(\d+) imported(?:, (\d+) filtered)?, (\d+) exported(?:, (\d+) preferred)?$/)
+    if m
+      %w(import filter export prefer).each_with_index do |n, i|
+        put_metric "#{name_base}.routes.#{n}", (m[i.succ] && !m[i.succ].empty?) ? m[i.succ].to_i : 0
+      end
+    else
+      state_int = 90001
+    end
+    x.each do |l|
+      m = l.match(/^\s+(Import|Export) (updates|withdraws):\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)\s+(\d+|-+)$/)
+      next unless m
+      direction, type = m[1].downcase, m[2].downcase
+      %w(receive reject filter ignore accept).each_with_index do |n, i|
+        i = i + 3
+        unless m[i][-1] == '-'
+          put_metric "#{name_base}.stats.#{direction}.#{type}_#{n}", m[i].to_i, diff: true
+        end
+      end
+    end
+
+    put_metric "#{name_base}.state.code", state_int
+  end
+end
+
+save_last_values!
