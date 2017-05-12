@@ -24,7 +24,7 @@
 # THE SOFTWARE.
 
 def birdc(*cmd, v6: false)
-  IO.popen([v6 ? 'birdc6' : 'birdc6', *cmd], 'r', &:read).each_line.lazy.map(&:chomp).grep_v(/^BIRD .* ready\.$/).to_a
+  IO.popen([v6 ? 'birdc6' : 'birdc', *cmd], 'r', &:read).each_line.lazy.map(&:chomp).grep_v(/^BIRD .* ready\.$/).to_a
 end
 
 v6 = ARGV.delete('-6')
