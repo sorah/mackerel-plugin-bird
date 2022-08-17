@@ -74,9 +74,9 @@ end
 
 # https://github.com/BIRD/bird/blob/7a855725f2ffde508da0c7ee01dc1bcd6e0a5d93/nest/cmds.c#L68
 def parse_size(str)
-  m = str.match(/\A\s*(\d+)\s+?(?:([kMG]?)B)\s*\z/)
+  m = str.match(/\A\s*([.\d]+)\s+?(?:([kMG]?)B)\s*\z/)
   if m
-    base = m[1].to_i
+    base = m[1].to_f
     unit = m[2]
     case unit
     when 'k'
@@ -94,6 +94,9 @@ def parse_size(str)
 end
 
 def put_metric(name, value, diff: false, time: @t || Time.now)
+  debug = ENV['BIRD_PLUGIN_DEBUG']
+  warn "#{name}=#{value}" if debug
+
   value = if diff
     calc_diff(name, value.to_i, time: time)
   else
@@ -105,6 +108,9 @@ end
 protocols = %w(Kernel BGP OSPF)
 ignored_protocol_names = []
 
+enable_memory_effective = false
+enable_memory_overhead = false
+
 OptionParser.new do |o|
   o.on('-p', '--protocols PROTOCOLS', 'protocol types to generate metrics (separated by comma) default=Kernel,BGP,OSPF') do |s|
     protocols = s.split(?,)
@@ -112,37 +118,54 @@ OptionParser.new do |o|
   o.on('-i', '--ignore PROTOCOLS', 'Protocol names to ignore (separated by comma)') do |s|
     ignored_protocol_names = s.split(?,)
   end
+
+  o.on('-M', '--enable-memory-alloc', 'Enable bird.memory_alloc.*') do
+    enable_memory_effective = true
+    enable_memory_overhead = true
+  end
+
+  o.on('--enable-memory-effective', 'Enable bird.memory_alloc.effective_*') do
+    enable_memory_effective = true
+  end
+
+  o.on('--enable-memory-overhead', 'Enable bird.memory_alloc.overhead_*') do
+    enable_memory_overhead = true
+  end
 end.parse!
 
-if ENV['MACKEREL_AGENT_PLUGIN_META'] == '1'
-  graphs = {
-    'bird.memory' => {
-      label: 'BIRD4: memory usage',
-      unit: 'bytes',
-      metrics: [
-        {name: 'tables', label: 'Routing tables', stacked: true},
-        {name: 'attributes', label: 'Route attributes', stacked: true},
-        {name: 'roa', label: 'ROA tables', stacked: true},
-        {name: 'protocols', label: 'Protocols', stacked: true},
-        {name: 'total', label: 'Total', stacked: false},
-      ],
-    },
-    'bird6.memory' => {
-      label: 'BIRD6: memory usage',
-      unit: 'bytes',
-      metrics: [
-        {name: 'tables', label: 'Routing tables', stacked: true},
-        {name: 'attributes', label: 'Route attributes', stacked: true},
-        {name: 'roa', label: 'ROA tables', stacked: true},
-        {name: 'protocols', label: 'Protocols', stacked: true},
-        {name: 'total', label: 'Total', stacked: false},
-      ],
-    },
-  }
+v4v6 = (birdc('version', v6: true) rescue nil) ? [false, true] : [false]
 
-  [false, true].each do |v6|
-    foursix = v6 ? '6' : '4'
+if ENV['MACKEREL_AGENT_PLUGIN_META'] == '1'
+  graphs = {}
+
+  v4v6.each do |v6|
+    foursix = v4v6.size == 1 ? '' : (v6 ? '6' : '4')
     six = v6 ? '6' : ''
+
+    graphs["bird#{six}.memory"] = {
+      label: "BIRD#{foursix}: memory usage",
+      unit: 'bytes',
+      metrics: [
+        {name: 'tables', label: 'Routing tables', stacked: true},
+        {name: 'attributes', label: 'Route attributes', stacked: true},
+        {name: 'roa', label: 'ROA tables', stacked: true},
+        {name: 'protocols', label: 'Protocols', stacked: true},
+        {name: 'standby', label: 'Standby Memory', stacked: true},
+        {name: 'total', label: 'Total', stacked: false},
+      ],
+    }
+    if enable_memory_effective || enable_memory_overhead
+      graphs["bird#{six}.memory_alloc"] =  {
+        label: "BIRD#{foursix}: memory allocation",
+        metrics: graphs.fetch("bird#{six}.memory").fetch(:metrics).flat_map do |m|
+          [
+            enable_memory_effective ? {name: "effective_#{m.fetch(:name)}", label: "#{m.fetch(:label)} (effective)", stacked: m.fetch(:stacked)} : nil,
+            enable_memory_overhead ? {name: "overhead_#{m.fetch(:name)}", label: "#{m.fetch(:label)} (overhead)", stacked: m.fetch(:stacked)} : nil,
+          ].compact
+        end
+      }
+    end
+
     birdc('show', 'protocols', v6: v6)[1..-1].each do |l|
       name,proto,table,state,since,info = l.split(/\s+/, 6)
       next unless protocols.include?(proto)
@@ -203,20 +226,44 @@ end
 
 t = Time.now
 
-[false, true].each do |v6|
+v4v6.each do |v6|
   foursix = v6 ? '6' : '4'
   six = v6 ? '6' : ''
 
-  birdc('show', 'memory', v6: v6)[1..-1].map do |l|
-    label, value = l.split(?:)
-    name = {
-      'Routing tables' => 'tables',
-      'Route attributes' => 'attributes',
-      'ROA tables' => 'roa',
-      'Protocols' => 'protocols',
-      'Total' => 'total',
-    }.fetch(label)
-    put_metric("bird#{six}.memory.#{name}", parse_size(value.strip))
+  show_memory = birdc('show', 'memory', v6: v6)
+  if show_memory[1]&.include?('Overhead')
+    show_memory[2..-1].map do |l|
+      label, v = l.split(?:, 2)
+      effective, overhead = v.strip.split(/\s+/)
+        .yield_self {|vs| ["#{vs[0]} #{vs[1]}", "#{vs[2]} #{vs[3]}"] }
+        .yield_self {|(e,o)| [parse_size(e), parse_size(o)] }
+
+      name = {
+        'Routing tables' => 'tables',
+        'Route attributes' => 'attributes',
+        'ROA tables' => 'roa',
+        'Protocols' => 'protocols',
+        'Standby memory' => 'standby',
+        'Total' => 'total',
+      }.fetch(label)
+      
+      put_metric("bird#{six}.memory.#{name}", effective+overhead)
+      put_metric("bird#{six}.memory_alloc.effective_#{name}", effective) if enable_memory_effective
+      put_metric("bird#{six}.memory_alloc.overhead_#{name}", overhead) if enable_memory_overhead
+    end
+  else
+    show_memory[1..-1].map do |l|
+      label, value = l.split(?:, 2)
+      name = {
+        'Routing tables' => 'tables',
+        'Route attributes' => 'attributes',
+        'ROA tables' => 'roa',
+        'Protocols' => 'protocols',
+        'Standby memory' => 'standby',
+        'Total' => 'total',
+      }.fetch(label)
+      put_metric("bird#{six}.memory.#{name}", parse_size(value.strip))
+    end
   end
 
   birdc('show', 'protocol', 'all', v6: v6)[1..-1].slice_after(&:empty?).each do |x|
